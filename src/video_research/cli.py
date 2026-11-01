@@ -52,18 +52,29 @@ def emit(report: dict, output: Path | None, inputs: tuple[Path, ...] = ()) -> No
         raise ValueError('Report filename must end with .private.json; no firmware outputs are supported.')
     if any(output.resolve() == item.resolve() for item in inputs):
         raise ValueError('Report output must not alias an input file.')
-    # Exclusive creation also refuses an existing symlink/hardlink, even if its
-    # target is absent. No mkdir, overwrite, in-place patching, or firmware copy.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
-    fd = os.open(output, flags, 0o600)
+    # Windows CRT O_EXCL can follow a dangling destination symlink. lstat
+    # rejects an existing entry early; hard-link creation is the atomic,
+    # no-overwrite publication guard if another process creates it afterward.
+    # Fail closed on filesystems without hard links; never fall back to rename.
+    try:
+        output.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError('Report destination already exists.')
+    temporary = output.parent/('.a7c2-video-' + os.urandom(16).hex() + '.private.json')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0)
+    fd = os.open(temporary, flags, 0o600)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-    except BaseException:
-        output.unlink(missing_ok=True)
-        raise
+        os.link(temporary, output)
+    finally:
+        # Only remove our temporary file, never a concurrent job's destination.
+        temporary.unlink(missing_ok=True)
+
 
 
 def main(argv: list[str] | None = None) -> int:
