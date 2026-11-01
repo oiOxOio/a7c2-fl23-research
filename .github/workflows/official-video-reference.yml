@@ -1,0 +1,38 @@
+name: Official Sony video reference
+
+on:
+  push:
+    branches: [feat/video-research-offline]
+    paths:
+      - 'dev/video_research/official_reference.py'
+      - '.github/workflows/official-video-reference.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  original-reference:
+    if: github.repository == 'oiOxOio/a7c2-fl23-research'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Synthetic downloader tests (no network)
+        run: python -B -m unittest discover -s dev/video_research -v
+      - name: Install decoder dependency used by the existing desktop tool
+        run: python -m pip install pycryptodomex==3.24.1
+      - name: Download official 2.01, extract AP/CP and run real-reference tests
+        run: python -B dev/video_research/official_reference.py --accept-sony-download-terms
+      - name: Publication checks (no firmware in checkout)
+        run: python -B dev/release/check_publication.py
+      # Intentionally no upload-artifact or cache step. Firmware and decoded
+      # components are temporary files, not release assets or repository data.
