@@ -1,0 +1,52 @@
+name: Offline video research
+
+on:
+  pull_request:
+    paths:
+      - 'video_research.py'
+      - 'src/video_research/**'
+      - 'dev/video_research/**'
+      - '.github/workflows/video-research.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'video_research.py'
+      - 'src/video_research/**'
+      - 'dev/video_research/**'
+      - '.github/workflows/video-research.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Synthetic tests (standard library only; no camera or firmware)
+        run: python -B -m unittest discover -s dev/video_research -v
+      - name: Guards remain active with optimized Python
+        run: python -O -B -m unittest discover -s dev/video_research -v
+      - name: CLI smoke checks (no firmware inputs)
+        run: |
+          python -B video_research.py catalog
+          python -B video_research.py plan --profile ff4k60
+          python -B video_research.py plan --profile 4k120
+          python -B video_research.py plan --profile af120
+      - name: Publication checks
+        run: python -B dev/release/check_publication.py
