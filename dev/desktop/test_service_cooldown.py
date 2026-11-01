@@ -22,6 +22,7 @@ class Camera:
         monkeypatch.setattr(transport, '_sony_pids', self.pids)
         monkeypatch.setattr(transport, '_service_exit', None)
         monkeypatch.setattr(transport, 'SERVICE_DRIVER_SETUP', None)
+        monkeypatch.setattr(transport, 'SERVICE_DEVICE_SCAN', None)
         monkeypatch.setattr(transport.usb.util, 'get_string', lambda dev, index: transport.core.MODEL)
         monkeypatch.setattr(transport.usb.util, 'dispose_resources', lambda dev: None)
         monkeypatch.setattr(transport, 'GenericUsbDriver', lambda backend: backend)
@@ -113,6 +114,34 @@ def test_windows_driver_preparation_runs_only_after_service_appears(monkeypatch)
     monkeypatch.setattr(transport,'SERVICE_DRIVER_SETUP',lambda:modes.append(camera.state()))
     with pytest.raises(Stop):transport.Session().__enter__()
     assert camera.auths==2 and modes==['service']
+
+
+@pytest.mark.parametrize('driver_ready', [True, False])
+def test_windows_service_missing_from_libusb_is_detected_by_host(monkeypatch, driver_ready):
+    enumerate_pids = transport._sony_pids
+    camera = Camera(monkeypatch, bounces=0, platform='win32')
+    monkeypatch.setattr(transport, '_sony_pids', enumerate_pids)
+    monkeypatch.setattr(transport.usb.backend.libusb1, 'get_backend', lambda **kwargs: Mock())
+    monkeypatch.setattr(transport.usb.core, 'find', lambda **kwargs: [])
+    monkeypatch.setattr(transport, 'SERVICE_DEVICE_SCAN', camera.pids)
+    prepared = []
+    get_device = camera.get_device
+
+    def open_device(pid):
+        if pid == 0x0336 and not (prepared and driver_ready):
+            raise RuntimeError('service driver unavailable')
+        return get_device(pid)
+
+    monkeypatch.setattr(transport, 'get_device', open_device)
+    monkeypatch.setattr(transport, 'SERVICE_DRIVER_SETUP', lambda: prepared.append(camera.state()))
+    if driver_ready:
+        with pytest.raises(Stop):
+            transport.Session().__enter__()
+    else:
+        with pytest.raises(RuntimeError, match='0336 已出现'):
+            transport.Session().__enter__()
+    assert prepared == ['service']
+    assert camera.auths == 1
 
 
 def test_authentication_error_is_not_retried(monkeypatch):

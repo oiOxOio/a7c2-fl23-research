@@ -3,6 +3,30 @@ import json,zipfile
 from desktopapp import jobs
 
 
+def test_usb_failure_export_preserves_driver_evidence_without_unrelated_files(tmp_path, monkeypatch):
+    monkeypatch.setenv('A7C2_DESKTOP_DATA', str(tmp_path/'app'))
+    job = jobs.new_job('usb_prepare', {})
+    evidence = {
+        'driver-before.private.json': dict(devices=[], errors=[]),
+        'driver-before-0e8a.private.json': dict(pid='0e8a', service='WinUSB'),
+        'driver-before-0336.private.json': dict(pid='0336', problem=28),
+        'driver-result-0e8a.private.json': dict(pid='0e8a', driver_changed=False),
+        'driver-result-0336.private.json': dict(pid='0336', driver_changed=True),
+        'service-driver-enumeration.private.json': dict(devices=[dict(pid='0336', problem=28)]),
+    }
+    for name, report in evidence.items():
+        (job/name).write_text(json.dumps(report))
+    (job/'driver-unrelated.private.json').write_text('PRIVATE-UNRELATED')
+    (job/'calibration.private.bin').write_bytes(b'PRIVATE-CALIBRATION')
+    output = tmp_path/'diagnostics.zip'
+    jobs.export_support(job, output)
+    with zipfile.ZipFile(output) as archive:
+        for name, report in evidence.items():
+            assert json.loads(archive.read('diagnostics/'+name)) == report
+        assert 'diagnostics/driver-unrelated.private.json' not in archive.namelist()
+        assert 'diagnostics/calibration.private.bin' not in archive.namelist()
+
+
 def test_export_includes_failed_child_stage_and_excludes_calibration(tmp_path,monkeypatch):
     monkeypatch.setenv('A7C2_DESKTOP_DATA',str(tmp_path/'app'))
     root=tmp_path/'setup';child=root/'install';child.mkdir(parents=True)

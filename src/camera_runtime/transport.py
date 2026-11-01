@@ -135,6 +135,8 @@ class SonyBusyFailure(DiagnosticUsbFailure): pass
 # Optional desktop-only driver preparation between the two enumerations.
 # CLI sessions leave it unset; it never retries authentication or firmware I/O.
 SERVICE_DRIVER_SETUP = None
+# Windows can see an unbound service device that libusb cannot enumerate yet.
+SERVICE_DEVICE_SCAN = None
 READY_WAIT=30
 SONY_BUSY_WAIT=10
 POLL_INTERVAL=1
@@ -274,8 +276,11 @@ def _cool_down():
 
 
 def _sony_pids():
-    backend=usb.backend.libusb1.get_backend(find_library=libusb_package.find_library)
-    return ['%04x'%d.idProduct for d in usb.core.find(find_all=True,idVendor=0x054c,backend=backend)]
+    backend = usb.backend.libusb1.get_backend(find_library=libusb_package.find_library)
+    pids = ['%04x' % d.idProduct for d in usb.core.find(find_all=True, idVendor=0x054c, backend=backend)]
+    if SERVICE_DEVICE_SCAN is not None:
+        pids.extend(SERVICE_DEVICE_SCAN())
+    return list(dict.fromkeys(pids))
 
 
 def _wait_for(pid,seconds,seen,prepare=None):
