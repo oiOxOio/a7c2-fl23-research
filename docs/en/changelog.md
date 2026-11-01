@@ -2,6 +2,25 @@
 
 [Home](../../README.md) · [简体中文](../zh-CN/changelog.md)
 
+## Unreleased - Windows service driver detection - 2026-11-01
+
+- Two-stage driver preparation also checks Windows SetupAPI while waiting for
+  service PID `0336`. A device without a driver (Windows problem code 28) can be
+  visible there but absent from libusb, preventing the previous flow from ever
+  starting its driver installer. Native enumeration now triggers the existing
+  driver setup; unknown PIDs are still never installation targets, and an
+  inaccessible service interface still stops without another authentication.
+- Support bundles include the before/result driver reports and the last native
+  service-enumeration snapshot, including failures that reused an existing
+  `0E8A` binding.
+- Simulated USB regression tests cover missing drivers, failed binding, no
+  repeated authentication, hook cleanup and diagnostic exports. Separately, on
+  2026-11-01, installing the `0336` WinUSB driver with the released 3.0.3 app
+  restored a complete service connection on one affected ILCE-7CM2, which then
+  returned to normal `0E8A` with no Windows device error. No firmware programs
+  were written. This validates the manual workaround; the new automatic driver
+  detection path and extended USB stability have not been physically tested.
+
 ## Standard license update — 2026-10-25
 
 - Use the unmodified public PolyForm Noncommercial License 1.0.0, replacing the previous MIT/Commons Clause combination and custom preamble. README and startup notice prominently state the commercial-use/profit prohibition, separately from the false-authorization heading. Third-party and previous licenses are retained.

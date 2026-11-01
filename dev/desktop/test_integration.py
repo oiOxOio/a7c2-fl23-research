@@ -51,7 +51,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_two_stage_driver_setup_has_one_session_no_auth_retry(self):
         events = []
-        transport = SimpleNamespace(SERVICE_DRIVER_SETUP=None)
+        transport = SimpleNamespace(SERVICE_DRIVER_SETUP=None, SERVICE_DEVICE_SCAN=None)
         @contextmanager
         def camera():
             events.append('first-auth')
@@ -68,6 +68,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(events, ['0e8a', 'first-auth', '0336', 'second-auth', 'end'])
         self.assertFalse(result['camera_firmware_written'])
         self.assertIsNone(transport.SERVICE_DRIVER_SETUP)
+        self.assertIsNone(transport.SERVICE_DEVICE_SCAN)
+
+    def test_two_stage_setup_observes_unbound_pnp_devices_and_clears_hooks_on_failure(self):
+        transport = SimpleNamespace(SERVICE_DRIVER_SETUP=None, SERVICE_DEVICE_SCAN=None)
+        rows = [
+            dict(id=r'USB\VID_054C&PID_0336\test-body', service='', problem=28),
+            dict(id=r'USB\VID_054C&PID_096F\test-body', service='HidUsb', problem=0),
+        ]
+        @contextmanager
+        def camera():
+            self.assertEqual(transport.SERVICE_DEVICE_SCAN(), ['0336', '096f'])
+            raise RuntimeError('simulated service failure')
+            yield
+        with patch.object(drivers.sys, 'platform', 'win32'), \
+             patch.object(drivers, 'install') as install, \
+             patch('desktopapp.platforms.windows_pnp.devices', return_value=rows), \
+             patch('looktool.devicesession.modules', return_value=(transport, None)), \
+             patch('looktool.devicesession.Camera', side_effect=camera):
+            with self.assertRaisesRegex(RuntimeError, 'simulated service failure'):
+                drivers.prepare(self.root)
+        install.assert_called_once_with({'pid': '0e8a'}, self.root)
+        saved = json.loads((self.root/'service-driver-enumeration.private.json').read_text())
+        self.assertEqual(saved['devices'], rows)
+        self.assertFalse(saved['camera_io'])
+        self.assertIsNone(transport.SERVICE_DRIVER_SETUP)
+        self.assertIsNone(transport.SERVICE_DEVICE_SCAN)
 
     def test_compile_uses_current_cli_calibration_option(self):
         args = dict(source='look.cube', name='Look', output='look.a7look', model='response.npz')

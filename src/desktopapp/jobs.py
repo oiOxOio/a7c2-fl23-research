@@ -126,6 +126,9 @@ def export_support(job, destination):
         archive.writestr('environment.json', json.dumps(summary, indent=2))
         for name in ['request.private.json', 'status.private.json', 'worker.log',
                      'process.log', 'result.private.json', 'driver-report.private.json',
+                     'driver-before.private.json', 'driver-before-0e8a.private.json',
+                     'driver-before-0336.private.json', 'driver-result-0e8a.private.json',
+                     'driver-result-0336.private.json', 'service-driver-enumeration.private.json',
                      'authorization.private.json','authorization.stdout.log','authorization.stderr.log',
                      'privilege.private.json','usb-stability.private.json','backend-workspace.private.json']:
             path = job / name

@@ -239,6 +239,21 @@ def prepare(job):
     results = []
     if sys.platform == 'win32':
         results.append(install({'pid': '0e8a'}, job))
+        last_pnp_report = None
+
+        def service_devices():
+            nonlocal last_pnp_report
+            from .windows_pnp import devices
+            report = {'platform': 'win32', 'camera_io': False, 'devices': devices()}
+            if report != last_pnp_report:
+                write_json(job / 'service-driver-enumeration.private.json', report)
+                last_pnp_report = report
+            pids = []
+            for row in report['devices']:
+                match = re.match(r'^USB\\VID_054C&PID_([0-9A-F]{4})(?:[\\&]|$)', row['id'], re.I)
+                if match and match[1].lower() not in pids:
+                    pids.append(match[1].lower())
+            return pids
 
         def service_driver():
             print('正在等待服务身份 054C:0336；出现后先检测驱动，已有可用绑定则跳过安装。', flush=True)
@@ -254,6 +269,7 @@ def prepare(job):
             print('服务身份已出现，检测现有驱动。', flush=True)
             results.append(install({'pid': '0336'}, job, report=report))
 
+        transport.SERVICE_DEVICE_SCAN = service_devices
         transport.SERVICE_DRIVER_SETUP = service_driver
     try:
         print('正在建立相机服务连接（此步骤不写固件）；两种 USB 身份分别检查。', flush=True)
@@ -263,6 +279,7 @@ def prepare(job):
                     'camera_firmware_written': False, 'driver_results': results}
     finally:
         transport.SERVICE_DRIVER_SETUP = None
+        transport.SERVICE_DEVICE_SCAN = None
 
 
 def driver_inventory():
