@@ -19,12 +19,14 @@ CP_SHA = 'f5a477588698ef965748903b8959a39ce4f59ffd4aee4d4234ef1670f56a1428'
 CP_SIZE = 18090880
 # Published entry points, not independently proven function extents.
 WINDOWS = (
-    ('frame-record-consumer', 0x131888, 0x180),
-    ('SetModeAsync', 0x989fda, 0x180),
-    ('outer-slot-24', 0x98cfde, 0x100),
+    ('frame-record-consumer', 0x131888, 0x300),
+    ('SetModeAsync', 0x989fda, 0x3a),
+    ('SetModeAsync-preparation', 0x98ac02, 0x3c),
+    ('mode-lookup-candidate', 0x98bd00, 0x150),
+    ('outer-slot-24', 0x98cfde, 0xa),
     ('outer-slot-10c', 0x39affc, 0x100),
-    ('mode-column-selection', 0x98c806, 0x180),
-    ('descriptor-consumption', 0x98bf52, 0xc0),
+    ('mode-column-selection', 0x98c806, 0x30),
+    ('descriptor-consumption', 0x98bf52, 0x6e),
 )
 
 
@@ -68,6 +70,53 @@ def immediate_candidates(data: bytes, values: set[int], maximum: int = 128):
     return dict(total=total, truncated=total > maximum, candidates=found)
 
 
+def pointer_table_candidates(data: bytes, slots: dict[int, int], maximum: int = 16) -> dict:
+    """Find exact co-located slots; this does NOT prove a live object's vptr.
+
+    Slot values include Thumb state bits. Returned roots are possible vtable
+    address points, not ELF symbols or an assertion of runtime ownership.
+    """
+    if not slots or maximum < 1:
+        raise ValueError('A nonempty bounded slot pattern is required.')
+    if any(not isinstance(k, int) or k < 0 or k % 4 or
+           not isinstance(v, int) or not 0 <= v <= 0xffffffff
+           for k, v in slots.items()):
+        raise ValueError('Slots must be aligned nonnegative offsets with u32 values.')
+    first = min(slots)
+    needle = struct.pack('<I', slots[first])
+    cursor, total, tables = 0, 0, []
+    while True:
+        hit = data.find(needle, cursor)
+        if hit < 0:
+            break
+        cursor = hit + 1
+        root = hit - first
+        if root < 0 or root % 4 or root > len(data) - max(slots) - 4:
+            continue
+        if not all(struct.unpack_from('<I', data, root+k)[0] == v for k, v in slots.items()):
+            continue
+        total += 1
+        if len(tables) < maximum:
+            tables.append(dict(cp_va=hex(BASE+root), file_offset=hex(root),
+                slots={hex(k): hex(v) for k, v in sorted(slots.items())},
+                runtime_receiver_verified=False))
+    return dict(total=total, truncated=total > maximum, candidates=tables)
+
+
+def emit_trace(report: dict) -> None:
+    """Readable bounded instruction lines, avoiding thousands of JSON log lines."""
+    for category in ('windows', 'candidate_contexts'):
+        for item in report[category]:
+            label = item.get('name', item['cp_va'])
+            print(json.dumps(dict(event=category, **{k:v for k,v in item.items()
+                                                      if k != 'instructions'})), flush=True)
+            for inst in item['instructions']:
+                print('CP|' + label + '|' + inst['at'] + '|' +
+                      inst['op'] + ' ' + inst['args'], flush=True)
+    print(json.dumps({k:v for k,v in report.items() if k not in
+                      ('windows', 'candidate_contexts')}), flush=True)
+
+
 def inspect(data: bytes) -> dict:
     if len(data) != CP_SIZE or hashlib.sha256(data).hexdigest() != CP_SHA:
         raise ValueError('Only the pinned original ILCE-7CM2 2.01 CP is accepted.')
@@ -84,7 +133,7 @@ def inspect(data: bytes) -> dict:
             sha256=hashlib.sha256(data[offset:offset+size]).hexdigest(),
             extent_is_function_boundary=False,
             instructions=[dict(at=hex(i.address), op=i.mnemonic, args=i.op_str)
-                          for i in instructions[:96]]))
+                          for i in instructions[:192]]))
     candidates = immediate_candidates(data, {0x5002, 0x99d4, 0x01d6, 0xe8e0})
     report['immediate_candidates'] = candidates
     for entry in candidates['candidates']:
@@ -98,6 +147,14 @@ def inspect(data: bytes) -> dict:
             warning='Speculative halfword-aligned context; not a reachable-code proof.',
             instructions=[dict(at=hex(i.address), op=i.mnemonic, args=i.op_str)
                           for i in instructions]))
+    report['co_located_slot_candidates'] = pointer_table_candidates(data, {
+        0x24: 0x98cfdf, 0x10c: 0x39affd, 0x110: 0x98c807})
+    report['mode_column_semantics'] = {
+        'input_domain': 'index into mode-column table, NOT literal sensor mode ID',
+        'function_va': '0x98c806', 'mode_column_table_va': '0x10fe8e0',
+        'patch_table_va': '0x10fdcb0', 'patch_row_stride': 24,
+        'terminator': 'zero target pointer',
+        'runtime_sensor_write_verified': False}
     return report
 
 
@@ -126,10 +183,7 @@ def main(argv=None) -> int:
         print(json.dumps(dict(event='mode_trace_source', page=page,
                               package_sha256=package_sha, modes=inventory['modes'])), flush=True)
         report = inspect(read_image(cp))
-        for name in ('windows', 'immediate_candidates', 'candidate_contexts'):
-            print(json.dumps(dict(event=name, data=report[name]), indent=2), flush=True)
-        print(json.dumps({k: v for k, v in report.items() if k not in
-                          ('windows', 'immediate_candidates', 'candidate_contexts')}), flush=True)
+        emit_trace(report)
     print('Temporary original firmware removed; no device access or firmware execution.', flush=True)
     return 0
 

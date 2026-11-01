@@ -58,5 +58,53 @@ class ModeTraceTests(unittest.TestCase):
             trace.main([])
 
 
+class PointerTableTests(unittest.TestCase):
+    def table(self, size=128, root=8):
+        data = bytearray(size)
+        slots = {4: 0x1235, 12: 0x5679, 20: 0xabcd}
+        for offset, value in slots.items():
+            struct.pack_into('<I', data, root+offset, value)
+        return bytes(data), slots
+
+    def test_exact_slots(self):
+        data, slots = self.table()
+        report = trace.pointer_table_candidates(data, slots)
+        self.assertEqual(report['total'], 1)
+        self.assertEqual(report['candidates'][0]['file_offset'], '0x8')
+        self.assertFalse(report['candidates'][0]['runtime_receiver_verified'])
+
+    def test_different_third_slot(self):
+        data, slots = self.table()
+        slots[20] ^= 2
+        self.assertEqual(trace.pointer_table_candidates(data, slots)['total'], 0)
+
+    def test_unaligned_table_rejected(self):
+        data, slots = self.table(root=7)
+        self.assertEqual(trace.pointer_table_candidates(data, slots)['total'], 0)
+
+    def test_below_file_and_truncation(self):
+        slots = {4: 0x1235, 12: 0x5679}
+        self.assertEqual(trace.pointer_table_candidates(struct.pack('<I', 0x1235), slots)['total'], 0)
+        data, slots = self.table()
+        self.assertEqual(trace.pointer_table_candidates(data[:24], slots)['total'], 0)
+
+    def test_bounded_matches(self):
+        data, slots = self.table(size=32)
+        report = trace.pointer_table_candidates(data*4, slots, maximum=2)
+        self.assertEqual(report['total'], 4)
+        self.assertEqual(len(report['candidates']), 2)
+        self.assertTrue(report['truncated'])
+
+    def test_invalid_pattern(self):
+        for slots in ({}, {-4: 1}, {1: 1}, {4: -1}, {4: 2**32}):
+            with self.assertRaises(ValueError):
+                trace.pointer_table_candidates(bytes(32), slots)
+
+    def test_thumb_state_bit_is_not_stripped(self):
+        data, slots = self.table()
+        slots[4] &= ~1
+        self.assertEqual(trace.pointer_table_candidates(data, slots)['total'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
