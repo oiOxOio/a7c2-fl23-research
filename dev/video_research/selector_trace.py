@@ -1,7 +1,8 @@
 """Read-only selector investigation on the pinned Sony 2.01 reference.
 
 Direct branch matches are candidates, not proof of instruction boundaries or
-runtime ownership. No USB, patching, firmware execution or installation.
+runtime ownership. Static analysis is the default. Optional isolated leaf emulation is explicit;
+no USB, firmware-file patching or camera installation is provided.
 """
 from __future__ import annotations
 import argparse
@@ -16,12 +17,25 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE = 0x108000
 WINDOWS = (
     ('selector-5002', 0xB2A87C, 0x50),
-    ('selector-predicate', 0xB2A8CC, 0x200),
-    ('paired-mode-conversion', 0xB2A04C, 0x134),
-    ('mode-index-lookup', 0x98DF72, 0x100),
-    ('mode-table-binding', 0x98CCF4, 0x200),
+    ('selector-predicate', 0xB2A8CC, 0x3A),
+    ('paired-mode-conversion', 0xB2A04C, 0x130),
+    ('mode-index-lookup', 0x98DF72, 0x22),
+    ('mode-table-binding', 0x98CCF4, 0x7E),
+    ('base-table-constructor', 0x98D878, 0x50),
+    ('instance-getter', 0x989D4A, 0x42),
+    ('first-mode-query', 0x989E8A, 0x80),
+    ('extra-mode-predicate', 0xB0B196, 0x100),
+    ('request-submission-wrapper', 0x4A8F0C, 0x38),
+    ('configuration-selector-entry', 0x4C0328, 0x270),
+    ('video-family-branch-candidate', 0x4C071A, 0x46),
+    ('selector-callsite-range', 0x4C09B0, 0x290),
+    ('mode-family-choice', 0x4C0F34, 0x150),
+    ('format-mode-choice', 0x4BFF90, 0x240),
 )
-TARGETS = frozenset(va for _, va, _ in WINDOWS) | {0x989FDA, 0x131888}
+# Some windows are internal ranges, not callable entries; scan only explicit targets.
+TARGETS = frozenset((0xB2A87C, 0xB2A8CC, 0xB2A04C, 0x98DF72, 0x98CCF4,
+    0x98D878, 0x989D4A, 0x989E8A, 0xB0B196, 0x4A8F0C, 0x4C0328,
+    0x4C0F34, 0x4BFF90, 0x989FDA, 0x131888))
 
 
 def decode_direct_branch(first: int, second: int, address: int):
@@ -148,6 +162,8 @@ def emit(report: dict) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--accept-sony-download-terms', action='store_true')
+    parser.add_argument('--emulate-selectors', action='store_true',
+                        help='Explicitly run three original leaf ranges in isolated emulator RAM.')
     args = parser.parse_args(argv)
     if not args.accept_sony_download_terms:
         parser.error('Explicit Sony-download acceptance is required.')
@@ -169,8 +185,15 @@ def main(argv=None) -> int:
             raise ValueError('Original inventory failed before selector tracing.')
         print(json.dumps(dict(event='selector_source', page=page,
                               package_sha256=package_sha)), flush=True)
-        emit(inspect(read_image(cp)))
-    print('Temporary firmware removed; no camera I/O or firmware execution.', flush=True)
+        data = read_image(cp)
+        emit(inspect(data))
+        if args.emulate_selectors:
+            from selector_emulation import run_original
+            print(json.dumps(dict(event='isolated_leaf_emulation',
+                                  data=run_original(data))), flush=True)
+    print('Temporary firmware removed; no camera I/O or firmware-file writes. ' +
+          ('Original leaves ran only in isolated emulator RAM.' if args.emulate_selectors
+           else 'No firmware instructions were executed.'), flush=True)
     return 0
 
 

@@ -4,7 +4,9 @@ on:
     branches: [feat/video-research-offline]
     paths:
       - 'dev/video_research/selector_trace.py'
+      - 'dev/video_research/selector_emulation.py'
       - 'dev/video_research/test_selector_trace.py'
+      - 'dev/video_research/test_selector_emulation.py'
       - '.github/workflows/video-selector-trace.yml'
   workflow_dispatch:
 permissions:
@@ -26,9 +28,9 @@ jobs:
           python-version: '3.11'
       - name: Synthetic tests before network access
         run: python -B -m unittest discover -s dev/video_research -v
-      - name: Fixed development decoders
-        run: python -m pip install pycryptodomex==3.24.1 capstone==5.0.6
-      - name: Original reference selector trace (no firmware execution)
-        run: python -B dev/video_research/selector_trace.py --accept-sony-download-terms
+      - name: Fixed development decoders and isolated CPU emulator
+        run: python -m pip install pycryptodomex==3.24.1 capstone==5.0.6 unicorn==2.1.4
+      - name: Original static trace and explicitly isolated leaf emulation
+        run: python -B dev/video_research/selector_trace.py --accept-sony-download-terms --emulate-selectors
       - name: Publication check
         run: python -B dev/release/check_publication.py

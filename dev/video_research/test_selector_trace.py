@@ -30,6 +30,16 @@ class BranchTests(unittest.TestCase):
     def test_known_bw_zero(self):
         self.assertEqual(trace.decode_direct_branch(0xf000, 0xb800, 0x1000), ('b.w', 0x1004))
 
+    def test_independent_llvm_encodings(self):
+        # clang --target=armv7-none-eabi, independently assembled Thumb branches.
+        samples = ((0, '00f000f8', 'bl', 4), (4, '00f000b8', 'b.w', 8),
+            (8, 'fff7feff', 'bl', 8), (12, 'fff7febf', 'b.w', 12),
+            (16, '00f0feff', 'bl', 4112), (20, 'fef7febf', 'b.w', 4294963220),
+            (24, 'fff3fef7', 'bl', 8388632), (28, 'fff7fe9f', 'b.w', 4286578716))
+        for at, raw, op, target in samples:
+            self.assertEqual(trace.decode_direct_branch(*struct.unpack('<HH', bytes.fromhex(raw)), at),
+                             (op, target))
+
     def test_signed_range_and_bits(self):
         at = 0x2000000
         for delta in (-0x1000000, -0xfffffe, -0x800000, -4096, -2, 0, 2, 4096, 0x7ffffe, 0xfffffe):
