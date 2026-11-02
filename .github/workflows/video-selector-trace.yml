@@ -1,0 +1,34 @@
+name: Official CP selector investigation
+on:
+  push:
+    branches: [feat/video-research-offline]
+    paths:
+      - 'dev/video_research/selector_trace.py'
+      - 'dev/video_research/test_selector_trace.py'
+      - '.github/workflows/video-selector-trace.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  selector:
+    if: github.repository == 'oiOxOio/a7c2-fl23-research'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Synthetic tests before network access
+        run: python -B -m unittest discover -s dev/video_research -v
+      - name: Fixed development decoders
+        run: python -m pip install pycryptodomex==3.24.1 capstone==5.0.6
+      - name: Original reference selector trace (no firmware execution)
+        run: python -B dev/video_research/selector_trace.py --accept-sony-download-terms
+      - name: Publication check
+        run: python -B dev/release/check_publication.py
