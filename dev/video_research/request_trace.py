@@ -20,19 +20,26 @@ CP_SIZE = 18_090_880
 CP_SHA = 'f5a477588698ef965748903b8959a39ce4f59ffd4aee4d4234ef1670f56a1428'
 AP_SIZE = 99_960_744
 AP_SHA = '2ea02f7ecbc5bb917316fe8ef4ce5ffd87eb66efaae78ba2ce11420552df539b'
-TARGETS = {0xB2A93A, 0xB2D040, 0x4C0328, 0xB0B074, 0x989D8C}
+TARGETS = {0xB2A93A, 0x4C0328, 0x989D8C, 0x98D284, 0xB1B5CE, 0xB2A374}
 # Starts are investigation anchors, not a declaration of complete function extents.
 WINDOWS = (
     ('instance-getter', 0x989D4A, 10),
     ('availability-dispatch', 0x989E8A, 10),
     ('extra-predicate', 0xB0B196, 70),
     ('descriptor-query-wrapper', 0x989D8C, 112),
-    ('previously-claimed-predicate-target', 0xB0B074, 248),
     ('request-generator', 0xB2A93A, 350),
-    ('request-context', 0xB2D040, 160),
     ('previously-claimed-request-callsite', 0x48FFC8, 64),
     ('request-submission', 0x4A8F0C, 56),
     ('configuration-dispatch', 0x4C0328, 48),
+    ('generator-caller-1-context-candidate', 0x4D89A0, 224),
+    ('generator-caller-1-call-anchor', 0x4D89F0, 96),
+    ('generator-caller-2-context-candidate', 0x4D8F42, 224),
+    ('generator-caller-2-call-anchor', 0x4D8F92, 96),
+    ('configuration-output-join-1', 0x4C0C40, 64),
+    ('configuration-output-join-2', 0x4C0CDA, 64),
+    ('request-builder-previous-submission-candidate', 0xB1B5CE, 42),
+    ('configuration-output-builder', 0xB2A374, 256),
+    ('availability-handler', 0x98D284, 50),
     ('selector-5002', 0xB2A87C, 80),
     ('selector-predicate', 0xB2A8CC, 58),
 )
@@ -127,6 +134,16 @@ class Elf64:
             raise ValueError('ELF virtual span is not uniquely file-backed.')
         return candidates[0]
 
+    def virtual_address(self, offset: int, size: int) -> int:
+        if any(type(x) is not int for x in (offset, size)) or offset < 0 or size <= 0:
+            raise ValueError('Invalid ELF file span.')
+        candidates = [va + offset - off for va, off, filesz, _, _ in self.loads
+                      if offset >= off and offset - off <= filesz
+                      and size <= filesz - (offset - off)]
+        if len(candidates) != 1:
+            raise ValueError('ELF file span is not uniquely mapped.')
+        return candidates[0]
+
     def symbols(self):
         for sec in self.sections:
             if sec[1] not in (2, 11):
@@ -157,6 +174,53 @@ def check_image(data: bytes, size: int, digest: str, name: str) -> None:
         raise ValueError('Unrecognized original reference: ' + name)
 
 
+def string_candidates(data: bytes, *, maximum: int = 24) -> dict:
+    """Bounded printable string leads, not function names or runtime proof."""
+    if type(maximum) is not int or not 1 <= maximum <= 100:
+        raise ValueError('String result bound must be 1..100.')
+    groups = {key: dict(total=0, strings=[], truncated=False) for key in SYMBOL_GROUPS}
+    for match in re.finditer(rb'[\x20-\x7e]{4,512}\x00', data):
+        offset = match.start()
+        if offset and 32 <= data[offset-1] < 127:
+            continue  # Never label the suffix of an overlong string as a complete string.
+        raw = match.group()[:-1]
+        text = raw.decode('ascii')
+        for key, pattern in SYMBOL_GROUPS.items():
+            if not pattern.search(text):
+                continue
+            item = groups[key]
+            item['total'] += 1
+            if len(item['strings']) < maximum:
+                item['strings'].append(dict(file_offset=hex(offset), length=len(raw),
+                    sha256=hashlib.sha256(raw).hexdigest(), text=text[:200],
+                    text_truncated=len(text) > 200, is_function_proof=False))
+            else:
+                item['truncated'] = True
+    return groups
+
+
+def audit_calls(data: bytes) -> list[dict]:
+    """Keep falsified earlier claims explicit; verify actual encodings, not prose."""
+    from selector_trace import decode_direct_branch
+    reviewed = (
+        (0xB2AA8C, 0x4C0328, True), (0x4A8F1A, 0x989FDA, True),
+        (0x4D89F0, 0xB2A93A, True), (0x4D8F92, 0xB2A93A, True),
+        (0x48FFD0, 0xB2A93A, False), (0x48FFEE, 0x4A8F0C, False),
+    )
+    result = []
+    for at, target, expected in reviewed:
+        raw = cp_span(data, at, 4)
+        decoded = decode_direct_branch(*struct.unpack('<HH', raw), at)
+        matches = decoded == ('bl', target)
+        if matches != expected:
+            raise ValueError('Pinned call-claim regression differs at ' + hex(at))
+        result.append(dict(at=hex(at), claimed_target=hex(target),
+            direct_bl_encoding_matches=matches, prior_claim_withdrawn=not expected,
+            instruction_sha256=hashlib.sha256(raw).hexdigest(),
+            runtime_reachability_verified=False))
+    return result
+
+
 def inspect(cp: bytes, ap: bytes) -> dict:
     # Check both identities before importing optional disassembly code.
     check_image(cp, CP_SIZE, CP_SHA, 'CP')
@@ -177,13 +241,14 @@ def inspect(cp: bytes, ap: bytes) -> dict:
                     complete_function=False, movie_reachable=False, instructions=insts)
 
     windows = [window(*item) for item in WINDOWS]
-    tables = [pc_table(cp, 0x4C0354, 29)]
+    tables = [pc_table(cp, at, count) for at,count in ((0x4C0354,29),
+        (0x4C03A0,5), (0x4C04E6,5), (0x4C053A,5), (0x4C05C8,5))]
     for target in sorted({int(e['target'], 16) for e in tables[0]['entries']}):
         windows.append(window('configuration-case-'+hex(target), target, 64))
     vtables = []
     for point in (0xDE98A0, 0xDEAC48, 0xDEB10C):
         slots = []
-        for slot in (0x10, 0x24, 0xD4, 0x10C, 0x110):
+        for slot in (0x10, 0x24, 0x28, 0xD4, 0x10C, 0x110):
             pointer = struct.unpack('<I', cp_span(cp, point+slot, 4))[0]
             entry = dict(slot=hex(slot), pointer=hex(pointer), thumb=bool(pointer & 1))
             target = pointer & ~1
@@ -205,7 +270,7 @@ def inspect(cp: bytes, ap: bytes) -> dict:
             item = groups[group]
             item['total'] += 1
             if len(item['symbols']) < 80:
-                record = dict(sym, va=hex(sym['va']), executable_function=sym['type'] == 2)
+                record = dict(sym, va=hex(sym['va']), symbol_is_function=sym['type'] == 2)
                 try:
                     record['file_offset'] = hex(elf.file_offset(sym['va'], max(1, sym['size'])))
                 except ValueError:
@@ -213,12 +278,24 @@ def inspect(cp: bytes, ap: bytes) -> dict:
                 item['symbols'].append(record)
             else:
                 item['truncated'] = True
-    return dict(schema='a7c2-request-trace/1', cp_sha256=CP_SHA, ap_sha256=AP_SHA,
+    ap_strings = string_candidates(ap)
+    for group in ap_strings.values():
+        for item in group['strings']:
+            try:
+                item['elf_va'] = hex(elf.virtual_address(int(item['file_offset'],16), item['length']+1))
+            except ValueError:
+                item['elf_va'] = None
+    cp_strings = string_candidates(cp)
+    for group in cp_strings.values():
+        for item in group['strings']:
+            item['cp_va'] = hex(BASE + int(item['file_offset'],16))
+    return dict(schema='a7c2-request-trace/2', cp_sha256=CP_SHA, ap_sha256=AP_SHA,
                 camera_io=False, firmware_executed=False, firmware_written=False,
                 movie_path_verified=False, recording_verified=False, installable=False,
                 direct_call_candidates=direct_call_candidates(cp, TARGETS, maximum=16),
                 dispatch_tables=tables, vtable_candidates=vtables,
-                ap_symbol_candidates=groups, windows=windows)
+                ap_symbol_candidates=groups, ap_string_candidates=ap_strings,
+                cp_string_candidates=cp_strings, call_claim_audit=audit_calls(cp), windows=windows)
 
 
 def emit(report: dict) -> None:
@@ -232,6 +309,8 @@ def emit(report: dict) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--accept-sony-download-terms', action='store_true')
+    parser.add_argument('--emulate-request', action='store_true',
+                        help='Run the reviewed call chain with explicitly synthetic state.')
     args = parser.parse_args(argv)
     if not args.accept_sony_download_terms:
         parser.error('Explicit Sony download acceptance is required.')
@@ -252,8 +331,13 @@ def main(argv=None) -> int:
         if inventory['errors'] or not inventory['cp_layout_verified']:
             raise ValueError('Original inventory failed before request tracing.')
         print(json.dumps(dict(event='request_source', page=page, package_sha256=digest)), flush=True)
-        emit(inspect(read_image(cp), read_image(ap)))
-    print('Temporary firmware removed; static analysis only, no camera I/O.', flush=True)
+        cp_bytes, ap_bytes = read_image(cp), read_image(ap)
+        emit(inspect(cp_bytes, ap_bytes))
+        if args.emulate_request:
+            from request_emulation import run_original
+            print(json.dumps(dict(event='isolated_request_chain', data=run_original(cp_bytes))), flush=True)
+    print('Temporary firmware removed; no camera I/O or firmware-file modification. '
+          + ('Reviewed original code ran only in emulator RAM.' if args.emulate_request else 'Static analysis only.'), flush=True)
     return 0
 
 

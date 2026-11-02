@@ -5,6 +5,8 @@ on:
     paths:
       - 'dev/video_research/request_trace.py'
       - 'dev/video_research/test_request_trace.py'
+      - 'dev/video_research/request_emulation.py'
+      - 'dev/video_research/test_request_emulation.py'
       - '.github/workflows/video-request-trace.yml'
   workflow_dispatch:
 permissions:
@@ -27,8 +29,8 @@ jobs:
       - name: Synthetic tests before network access
         run: python -B -m unittest discover -s dev/video_research -v
       - name: Fixed development decoders
-        run: python -m pip install pycryptodomex==3.24.1 capstone==5.0.6
+        run: python -m pip install pycryptodomex==3.24.1 capstone==5.0.6 unicorn==2.1.4
       - name: Original request and dispatch analysis
-        run: python -B dev/video_research/request_trace.py --accept-sony-download-terms
+        run: python -B dev/video_research/request_trace.py --accept-sony-download-terms --emulate-request
       - name: Publication check
         run: python -B dev/release/check_publication.py

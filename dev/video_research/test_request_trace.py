@@ -135,6 +135,35 @@ class ElfTests(unittest.TestCase):
             elf.file_offset(0x1200, 1)
 
 
+class StringAndInverseMapTests(unittest.TestCase):
+    def test_inverse_segment_map(self):
+        self.assertEqual(r.Elf64(elf_fixture()).virtual_address(512,16), 0x1200)
+        with self.assertRaises(ValueError):
+            r.Elf64(elf_fixture()).virtual_address(768,1)
+
+    def test_ambiguous_inverse(self):
+        elf = r.Elf64(elf_fixture())
+        elf.loads.append(elf.loads[0])
+        with self.assertRaises(ValueError):
+            elf.virtual_address(512,1)
+
+    def test_bounded_keyword_strings(self):
+        result = r.string_candidates(b'\0CropMode\0MovieFrameRate\0XavcFormat\0', maximum=1)
+        self.assertEqual(result['crop']['total'],1)
+        self.assertEqual(result['recording-format']['total'],2)
+        self.assertTrue(result['recording-format']['truncated'])
+        self.assertFalse(result['crop']['strings'][0]['is_function_proof'])
+
+    def test_incomplete_or_overlong_not_returned(self):
+        self.assertEqual(r.string_candidates(b'CropMode')['crop']['total'],0)
+        self.assertEqual(r.string_candidates(b'x'*600+b'CropMode\0')['crop']['total'],0)
+
+    def test_bad_string_bound(self):
+        for maximum in (0,101,True):
+            with self.subTest(maximum=maximum), self.assertRaises(ValueError):
+                r.string_candidates(b'CropMode\0',maximum=maximum)
+
+
 class BoundaryTests(unittest.TestCase):
     def test_identity_rejected_before_decoder_import(self):
         with patch.dict(sys.modules, {'capstone': None}):
