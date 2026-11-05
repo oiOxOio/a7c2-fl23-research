@@ -92,12 +92,12 @@ def inspect(cp: bytes) -> dict:
         actual_frame_cadence_verified=False,camera_io=False,installable=False)
 
 
-def run_original(cp: bytes) -> dict:
+def _run_mode_cases(cp: bytes, modes: tuple[tuple[int, int], ...]) -> list[dict]:
     check_image(cp,CP_SIZE,CP_SHA,'CP')
     import unicorn as u
     from unicorn import arm_const as a
     cases=[]
-    for index,mode in ((9,0x880),(23,0x821),(5,0x5002)):
+    for index,mode in modes:
         if struct.unpack('<I',cp_span(cp,MODE_IDS+index*4,4))[0]!=mode:raise ValueError('Original mode index differs.')
         req,meta=REQUEST_TABLE+index*24,META_TABLE+index*28
         uc=u.Uc(u.UC_ARCH_ARM,u.UC_MODE_THUMB)
@@ -147,6 +147,11 @@ def run_original(cp: bytes) -> dict:
             request_record_sha256=hashlib.sha256(cp_span(cp,req,24)).hexdigest(),
             metadata_record_sha256=hashlib.sha256(cp_span(cp,meta,28)).hexdigest(),
             instruction_stream_sha256=hashlib.sha256(b''.join(cp_span(cp,pc,size) for pc,size in trace)).hexdigest()))
+    return cases
+
+
+def run_original(cp: bytes) -> dict:
+    cases = _run_mode_cases(cp, ((9,0x880),(23,0x821),(5,0x5002)))
     ratio=cases[0]['pre_rounding_quantity']/cases[1]['pre_rounding_quantity']
     if not math.isclose(ratio,2.0,rel_tol=1e-14):raise ValueError('Original timing ratio differs.')
     return dict(schema='a7c2-cp-default-timing-original/1',cp_sha256=CP_SHA,cases=cases,
@@ -160,3 +165,37 @@ def run_original(cp: bytes) -> dict:
         inference='The 2:1 default quantity ratio is consistent with the separately proven lower-rate versus 59.94P branches; it is not a measured sensor cadence.',
         physical_unit_verified=False,actual_frame_cadence_verified=False,
         runtime_override_excluded=False,driver_readiness_fabricated=False,camera_io=False,installable=False)
+
+
+def run_catalog(cp: bytes) -> dict:
+    """Compare every original default mode; no frame-rate or full-FOV inference.
+
+    Each case uses the same bounded original helper/arithmetic fragments as
+    run_original. No whole-firmware execution, runtime override, queue operation,
+    readout/scaler change or sensor-register write is performed.
+    """
+    from src.video_research.reference import MODE_IDS, FRAME_TABLE_VA, FRAME_STRIDE
+    cases = _run_mode_cases(cp, tuple(enumerate(MODE_IDS)))
+    by_mode = {int(case['mode'], 16): case for case in cases}
+    reference = by_mode[0x0821]['pre_rounding_quantity']
+    if reference <= 0 or not math.isfinite(reference):
+        raise ValueError('Invalid comparison quantity.')
+    for case in cases:
+        row = FRAME_TABLE_VA + case['index'] * FRAME_STRIDE
+        case['frame_width'] = struct.unpack('<H', cp_span(cp, row + 8, 2))[0]
+        case['frame_height'] = struct.unpack('<H', cp_span(cp, row + 0x1a, 2))[0]
+        case['frame_record_sha256'] = hashlib.sha256(cp_span(cp, row, FRAME_STRIDE)).hexdigest()
+        case['quantity_ratio_to_0821'] = case['pre_rounding_quantity'] / reference
+    return dict(schema='a7c2-cp-default-timing-catalog-original/1', cp_sha256=CP_SHA,
+        case_count=len(cases), cases=cases, reference_mode='0x821',
+        reference_quantity=reference,
+        original_table_inputs=True, all_original_default_mode_rows_compared=True,
+        original_helper_and_arithmetic_fragments_separate=True,
+        emulator_vfp_enabled=True,
+        stopped_before='0x131668 calls rounding helper 0x14f078',
+        qualification='Complete for the 30 pinned default-table rows only. Dimensions are stored metadata; quantities are pre-rounding arithmetic, not measured frame periods. This does not enumerate every possible firmware or hardware configuration.',
+        rounding_or_downstream_helpers_executed=False, physical_unit_verified=False,
+        actual_frame_cadence_verified=False, full_sensor_field_of_view_verified=False,
+        binning_or_line_skip_verified=False, runtime_override_excluded=False,
+        sensor_to_encoder_path_verified=False, hardware_impossibility_proven=False,
+        driver_readiness_fabricated=False, camera_io=False, installable=False)
