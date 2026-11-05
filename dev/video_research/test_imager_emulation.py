@@ -32,6 +32,10 @@ import cp_snapshot_emulation as snapshot
 import osal_transport
 
 class IdentityTests(unittest.TestCase):
+    def test_timing_catalog_identity_before_emulator_import(self):
+        with patch.dict(sys.modules, {'unicorn': None}):
+            with self.assertRaises(ValueError):timing_compare.run_catalog(b'not firmware')
+
     def test_codec_transport_identity(self):
         for fn in (codec_transport.inspect,codec_transport.run_original):
             with self.assertRaises(ValueError):fn(b'bad')
@@ -208,6 +212,29 @@ class OriginalInstructionTests(unittest.TestCase):
         self.assertFalse(result['setmode_sync_executed'])
         self.assertFalse(result['setmode_async_executed'])
         self.assertFalse(result['preceding_branch_gates_executed'])
+
+    def test_original_default_timing_catalog(self):
+        data=Path(os.environ['A7C2_VIDEO_CP_REFERENCE']).read_bytes()
+        report=timing_compare.run_catalog(data)
+        from src.video_research.reference import MODE_IDS
+        self.assertEqual(report['case_count'],30)
+        self.assertEqual([int(c['mode'],16) for c in report['cases']],list(MODE_IDS))
+        cases={int(c['mode'],16):c for c in report['cases']}
+        for case in timing_compare.run_original(data)['cases']:
+            actual=cases[int(case['mode'],16)]
+            for field,value in case.items():self.assertEqual(actual[field],value)
+        wide=[c for c in report['cases'] if c['frame_width']==7008]
+        self.assertEqual([c['mode'] for c in wide],['0xa000','0xa100','0x880','0x8c0'])
+        self.assertTrue(all(c['quantity_ratio_to_0821']>1.98 for c in wide))
+        self.assertEqual((cases[0x5002]['frame_width'],cases[0x5002]['frame_height']),(3504,2336))
+        self.assertEqual(cases[0x5002]['quantity_ratio_to_0821'],1.0)
+        self.assertAlmostEqual(cases[0x0ae0]['quantity_ratio_to_0821'],0.5)
+        self.assertTrue(report['all_original_default_mode_rows_compared'])
+        for flag in ('physical_unit_verified','actual_frame_cadence_verified',
+            'full_sensor_field_of_view_verified','runtime_override_excluded',
+            'sensor_to_encoder_path_verified','hardware_impossibility_proven',
+            'camera_io','installable'):
+            self.assertIs(report[flag],False)
 
     def test_original_default_timing_comparison(self):
         data=Path(os.environ['A7C2_VIDEO_CP_REFERENCE']).read_bytes()

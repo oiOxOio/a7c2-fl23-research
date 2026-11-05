@@ -292,6 +292,7 @@ def main(argv=None) -> int:
             ('cp_request_handoff_original', cp_request_handoff.run_copies(cp_bytes)),
             ('cp_default_timing_static', cp_timing_compare.inspect(cp_bytes)),
             ('cp_default_timing_original', cp_timing_compare.run_original(cp_bytes)),
+            ('cp_default_timing_catalog_original', cp_timing_compare.run_catalog(cp_bytes)),
             ('cp_availability_init_static', cp_availability_init.inspect(cp_bytes)),
             ('cp_availability_init_fragments', cp_availability_init.run_original(cp_bytes)),
             ('cp_movie_selector_static', cp_movie_selector.inspect(cp_bytes)),
