@@ -5,6 +5,17 @@ on:
     branches: [feat/video-research-offline]
     paths:
       - 'dev/video_research/official_reference.py'
+      - 'dev/video_research/ap_xrefs.py'
+      - 'dev/video_research/ap_registration.py'
+      - 'dev/video_research/ap_builder_emulation.py'
+      - 'dev/video_research/cp_dispatch_emulation.py'
+      - 'dev/video_research/cp_imager_emulation.py'
+      - 'dev/video_research/cp_snapshot_emulation.py'
+      - 'dev/video_research/cp_check_emulation.py'
+      - 'dev/video_research/osal_transport.py'
+      - 'dev/video_research/test_ap_xrefs.py'
+      - 'dev/video_research/test_ap_registration.py'
+      - 'dev/video_research/test_imager_emulation.py'
       - '.github/workflows/official-video-reference.yml'
   workflow_dispatch:
 
@@ -28,8 +39,8 @@ jobs:
           python-version: '3.11'
       - name: Synthetic downloader tests (no network)
         run: python -B -m unittest discover -s dev/video_research -v
-      - name: Install decoder dependency used by the existing desktop tool
-        run: python -m pip install pycryptodomex==3.24.1
+      - name: Install pinned offline decoder and emulator dependencies
+        run: python -m pip install pycryptodomex==3.24.1 unicorn==2.1.4
       - name: Download official 2.01, extract AP/CP and run real-reference tests
         run: python -B dev/video_research/official_reference.py --accept-sony-download-terms
       - name: Publication checks (no firmware in checkout)

@@ -1,4 +1,4 @@
-"""Explicit Sony-download integration runner; never installs or runs firmware.
+"""Explicit Sony-download integration runner; never installs firmware or opens a camera.
 
 Separate from the standard-library-only offline CLI. Requires the project's
 vendored fwtool and pycryptodomex only when extracting the official package.
@@ -119,8 +119,8 @@ def check_header(header) -> None:
         raise ValueError('Official package model/version does not match ILCE-7CM2 2.01.')
 
 
-def extract_components(source: Path, directory: Path) -> dict:
-    """Select AP/CP only. No extractall, symlinks, calibration or native code."""
+def extract_components(source: Path, directory: Path, *, with_transport: bool = False, with_mpr: bool = False) -> dict:
+    """Select AP/CP and optionally pinned OSAL/MPR dependencies only. No extractall, symlinks, calibration or native code."""
     sys.path.insert(0, str(ROOT / 'src/desktopapp/vendor'))
     sys.path.insert(0, str(ROOT))
     from fwtool.sony import dat, fdat
@@ -128,6 +128,20 @@ def extract_components(source: Path, directory: Path) -> dict:
     from src.video_research import reference as ref
 
     wanted = {item.name: item for item in (ref.AP, ref.CP)}
+    if with_transport:
+        from types import SimpleNamespace
+        from osal_transport import SIZE, SHA
+        wanted['libosal_uipc.so'] = SimpleNamespace(name='libosal_uipc.so',size=SIZE,sha256=SHA)
+    if with_mpr:
+        from types import SimpleNamespace
+        from mpr_bitrate import SIZE, SHA
+        wanted['libmpr.so'] = SimpleNamespace(name='libmpr.so',size=SIZE,sha256=SHA)
+        from avbbc_receiver import SIZE, SHA
+        wanted['libInfraAvbbc.so'] = SimpleNamespace(name='libInfraAvbbc.so',size=SIZE,sha256=SHA)
+        from avbbc_receiver import DATAFLOW_SIZE, DATAFLOW_SHA
+        wanted['dataflowInfraFramework.so'] = SimpleNamespace(name='dataflowInfraFramework.so',size=DATAFLOW_SIZE,sha256=DATAFLOW_SHA)
+        from avbbc_receiver import KERNEL_SIZE, KERNEL_SHA
+        wanted['osal_uipc.ko'] = SimpleNamespace(name='osal_uipc.ko',size=KERNEL_SIZE,sha256=KERNEL_SHA)
     found = {}
 
     def keep(name, stream, size):
@@ -182,7 +196,7 @@ def extract_components(source: Path, directory: Path) -> dict:
                 if len(found) == len(wanted):
                     break
     if set(found) != set(wanted):
-        raise ValueError('Official package does not contain both required components.')
+        raise ValueError('Official package does not contain every required component.')
     return {'files': found, 'decoder': cipher, 'container_crc_verified': True,
             'sony_rsa_signature_verified': False}
 
@@ -208,7 +222,7 @@ def main(argv=None) -> int:
             package_sha = copy_exact(response, output, PACKAGE_SIZE)
         print(json.dumps({'event': 'official_download_complete', 'page': page,
                           'url': url, 'size': PACKAGE_SIZE, 'sha256': package_sha}), flush=True)
-        original = extract_components(source, work)
+        original = extract_components(source, work, with_transport=True, with_mpr=True)
         from src.video_research.inventory import inspect_images
         import os
         cp, ap = original['files']['cpapp-b.bin'], original['files']['appFw.so']
@@ -224,8 +238,104 @@ def main(argv=None) -> int:
                           'container_crc_verified': original['container_crc_verified'],
                           'sony_rsa_signature_verified': original['sony_rsa_signature_verified']},
                          indent=2), flush=True)
+        # Bounded original instruction fragments, not firmware boot/device execution.
+        import osal_transport
+        import avbbc_receiver
+        import mpr_codec_transport
+        import cp_movie_geometry
+        import cp_stream_geometry
+        import cp_lowres_route
+        import cp_request_handoff
+        import cp_timing_compare
+        import cp_availability_init
+        import cp_movie_selector
+        import cp_selector_fields
+        import cp_mode_sequence
+        import cp_selector_state
+        import mpr_bitrate
+        import ap_mpr_encoding
+        import ap_mpr_quality
+        import movie_setting_flow
+        import ap_apsc_flow
+        import ap_setting_flow
+        import ap_registration
+        import ap_xrefs
+        import ap_builder_emulation
+        import cp_dispatch_emulation
+        import cp_check_emulation
+        import cp_snapshot_emulation
+        import cp_imager_emulation
+        ap_bytes, cp_bytes = ap.read_bytes(), cp.read_bytes()
+        mpr_bytes = original['files']['libmpr.so'].read_bytes()
+        for event, evidence in (
+            ('osal_transport_boundary', osal_transport.inspect(original['files']['libosal_uipc.so'].read_bytes())),
+            ('ap_xrefs', ap_xrefs.inspect(ap_bytes)),
+            ('cp_geometry_lookup_original', cp_stream_geometry.run_geometry_lookup(cp_bytes)),
+            ('codec_profile_pin_original', avbbc_receiver.run_profile_pin(mpr_bytes,original['files']['libInfraAvbbc.so'].read_bytes())),
+            ('ap_pin_topology_static', avbbc_receiver.inspect_ap_topology(ap_bytes)),
+            ('kernel_queue_boundary_static', avbbc_receiver.inspect_kernel(original['files']['osal_uipc.ko'].read_bytes())),
+            ('dataflow_pin_transport_static', avbbc_receiver.inspect_dataflow(original['files']['dataflowInfraFramework.so'].read_bytes())),
+            ('avbbc_receiver_static', avbbc_receiver.inspect(original['files']['libInfraAvbbc.so'].read_bytes())),
+            ('avbbc_receiver_original', avbbc_receiver.run_original(original['files']['libInfraAvbbc.so'].read_bytes())),
+            ('mpr_codec_transport_static', mpr_codec_transport.inspect(mpr_bytes)),
+            ('mpr_codec_transport_original', mpr_codec_transport.run_original(mpr_bytes)),
+            ('cp_movie_geometry_static', cp_movie_geometry.inspect(cp_bytes)),
+            ('cp_movie_geometry_original', cp_movie_geometry.run_original(cp_bytes)),
+            ('cp_stream_geometry_static', cp_stream_geometry.inspect(cp_bytes)),
+            ('cp_stream_geometry_original', cp_stream_geometry.run_original(cp_bytes)),
+            ('cp_lowres_route_static', cp_lowres_route.inspect(cp_bytes)),
+            ('cp_lowres_route_original', cp_lowres_route.run_original(cp_bytes)),
+            ('cp_builder_category_original', cp_request_handoff.run_builder_gate(cp_bytes)),
+            ('cp_stage_receiver_original', cp_request_handoff.run_stage_receiver(cp_bytes)),
+            ('cp_request_queue_dispatch', cp_request_handoff.run_queue_dispatch(cp_bytes)),
+            ('cp_request_handoff_static', cp_request_handoff.inspect(cp_bytes)),
+            ('cp_request_handoff_original', cp_request_handoff.run_copies(cp_bytes)),
+            ('cp_default_timing_static', cp_timing_compare.inspect(cp_bytes)),
+            ('cp_default_timing_original', cp_timing_compare.run_original(cp_bytes)),
+            ('cp_availability_init_static', cp_availability_init.inspect(cp_bytes)),
+            ('cp_availability_init_fragments', cp_availability_init.run_original(cp_bytes)),
+            ('cp_movie_selector_static', cp_movie_selector.inspect(cp_bytes)),
+            ('cp_movie_selector_fragments', cp_movie_selector.run_original(cp_bytes)),
+            ('cp_rate_projection_fragments', cp_movie_selector.run_rate_projection(cp_bytes)),
+            ('cp_selector_fields_static', cp_selector_fields.inspect(cp_bytes)),
+            ('cp_selector_fields_fragment', cp_selector_fields.run_original(cp_bytes)),
+            ('cp_mode_sequence_static', cp_mode_sequence.inspect(cp_bytes)),
+            ('cp_mode_sequence_fragments', cp_mode_sequence.run_original(cp_bytes)),
+            ('cp_selector_state_static', cp_selector_state.inspect(cp_bytes)),
+            ('cp_selector_state_fragments', cp_selector_state.run_original(cp_bytes)),
+            ('mpr_bitrate_static', mpr_bitrate.inspect(mpr_bytes)),
+            ('mpr_bitrate_original', mpr_bitrate.run_original(mpr_bytes)),
+            ('mpr_target_parameter_chain', mpr_bitrate.run_parameter_chain(ap_bytes,mpr_bytes)),
+            ('ap_mpr_encoding_static', ap_mpr_encoding.inspect(ap_bytes)),
+            ('ap_mpr_encoding_original', ap_mpr_encoding.run_original(ap_bytes)),
+            ('ap_mpr_quality_static', ap_mpr_quality.inspect(ap_bytes)),
+            ('ap_mpr_quality_original', ap_mpr_quality.run_original(ap_bytes)),
+            ('movie_setting_static_flow', movie_setting_flow.inspect(ap_bytes,cp_bytes)),
+            ('movie_ap_fragments', movie_setting_flow.run_ap_original(ap_bytes)),
+            ('movie_cp_fragments', movie_setting_flow.run_cp_original(cp_bytes)),
+            ('ap_apsc_static_flow', ap_apsc_flow.inspect(ap_bytes)),
+            ('ap_apsc_menu_value_fragment', ap_apsc_flow.run_menu_values_original(ap_bytes)),
+            ('ap_apsc_builder', ap_apsc_flow.run_original(ap_bytes)),
+            ('cp_apsc_policy_fragments', cp_imager_emulation.run_original(cp_bytes,message_id=0x40a2)),
+            ('ap_setting_static_flow', ap_setting_flow.inspect(ap_bytes)),
+            ('ap_notification_fragments', ap_setting_flow.run_original(ap_bytes)),
+            ('ap_registration', ap_registration.inspect(ap_bytes)),
+            ('ap_registration_fragments', ap_registration.run_original(ap_bytes)),
+            ('ap_rate_predicates', ap_registration.run_rate_original(ap_bytes)),
+            ('ap_builder_prefix', ap_builder_emulation.run_original(ap_bytes)),
+            ('cp_dispatch_prefix', cp_dispatch_emulation.run_original(cp_bytes)),
+            ('cp_state_lifecycle', cp_dispatch_emulation.run_state_lifecycle_original(cp_bytes)),
+            ('cp_handler_fragments', cp_imager_emulation.run_original(cp_bytes)),
+            ('cp_initialization_snapshot', cp_snapshot_emulation.run_original(cp_bytes)),
+            ('cp_check_callback', cp_check_emulation.run_original(cp_bytes)),
+        ):
+            print(json.dumps({'event': event, 'evidence': evidence}, indent=2), flush=True)
         env = dict(os.environ, A7C2_VIDEO_CP_REFERENCE=str(cp),
-                   A7C2_VIDEO_AP_REFERENCE=str(ap), PYTHONDONTWRITEBYTECODE='1')
+                   A7C2_VIDEO_KERNEL_REFERENCE=str(original['files']['osal_uipc.ko']),
+                   A7C2_VIDEO_DATAFLOW_REFERENCE=str(original['files']['dataflowInfraFramework.so']),
+                   A7C2_VIDEO_AVBBC_REFERENCE=str(original['files']['libInfraAvbbc.so']),
+                   A7C2_VIDEO_AP_REFERENCE=str(ap), A7C2_VIDEO_MPR_REFERENCE=str(original['files']['libmpr.so']),
+                   PYTHONDONTWRITEBYTECODE='1')
         for optimization in ([], ['-O']):
             subprocess.run([sys.executable, *optimization, '-B', '-m', 'unittest',
                             'discover', '-s', 'dev/video_research', '-v'],

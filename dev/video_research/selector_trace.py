@@ -27,7 +27,7 @@ WINDOWS = (
     ('extra-mode-predicate', 0xB0B196, 0x100),
     ('request-submission-wrapper', 0x4A8F0C, 0x38),
     ('configuration-selector-entry', 0x4C0328, 0x270),
-    ('video-family-branch-candidate', 0x4C071A, 0x46),
+    ('descriptor-class-28-branch-unresolved', 0x4C071A, 0x46),
     ('selector-callsite-range', 0x4C09B0, 0x290),
     ('mode-family-choice', 0x4C0F34, 0x150),
     ('format-mode-choice', 0x4BFF90, 0x240),
